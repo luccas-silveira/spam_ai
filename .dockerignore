@@ -1,0 +1,21 @@
+# Python artifacts
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Environments
+venv/
+.env
+.env.*
+
+# Git
+.git
+.gitignore
+
+# Local data/secrets (mount as volumes instead)
+data/
+server.log
+*.log
+
+# macOS cruft
+.DS_Store

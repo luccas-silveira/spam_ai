@@ -1,0 +1,37 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+ENV/
+*.egg-info/
+dist/
+build/
+
+# Environment variables
+.env
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# OAuth tokens (sensitive)
+data/agency_token.json
+data/location_token.json
+
+# Spam emails (may contain sensitive data)
+data/spam_emails/
+
+# Logs
+*.log
+server.log

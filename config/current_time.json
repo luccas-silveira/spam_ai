@@ -1,0 +1,8 @@
+{
+  "source": "https://worldtimeapi.org/api/ip",
+  "timezone": "America/Sao_Paulo",
+  "datetime_iso": "2025-11-07T14:20:23.221392-03:00",
+  "utc_iso": "2025-11-07T17:20:23.221392+00:00",
+  "unix": 1762536023,
+  "retrieved_at": "2025-11-07T17:20:23.195805Z"
+}
