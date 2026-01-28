@@ -32,6 +32,9 @@ data/location_token.json
 # Spam emails (may contain sensitive data)
 data/spam_emails/
 
+# Spam conversations collected from GHL (sensitive data)
+data/spam_conversations/
+
 # Logs
 *.log
 server.log

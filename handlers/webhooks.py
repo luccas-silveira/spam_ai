@@ -25,102 +25,71 @@ import json
 import logging
 import asyncio
 from datetime import datetime
-import google.generativeai as genai
+from pathlib import Path
+import sys
+
+# Adicionar diretório raiz ao path para importar utils
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
+from openai import AsyncOpenAI
+from utils.two_pass_detector import TwoPassSpamDetector
 
 
-async def initialize_gemini(app: web.Application):
-    """Inicializa a API do Gemini no startup do servidor.
+async def initialize_openai(app: web.Application):
+    """Inicializa a API da OpenAI e o sistema Two-Pass no startup do servidor.
 
-    Configura a API key e valida conexão.
+    Configura a API key, valida conexão e carrega prompt otimizado.
     """
-    logging.info("🔄 Inicializando Gemini API para detecção de spam...")
+    logging.info("🔄 Inicializando sistema de detecção de spam...")
 
     try:
-        api_key = os.getenv("GEMINI_API_KEY")
+        api_key = os.getenv("OPENAI_API_KEY")
 
         if not api_key:
-            logging.error("❌ GEMINI_API_KEY não encontrada no .env")
-            app["gemini_enabled"] = False
+            logging.error("❌ OPENAI_API_KEY não encontrada no .env")
+            app["openai_enabled"] = False
+            app["spam_detector"] = None
             return
 
-        genai.configure(api_key=api_key)
+        # Criar cliente async da OpenAI
+        client = AsyncOpenAI(api_key=api_key)
 
-        # Testar conexão listando modelos disponíveis
-        models = genai.list_models()
-        logging.info(f"✅ Gemini API inicializada com sucesso! Modelos disponíveis: {len(list(models))}")
-        app["gemini_enabled"] = True
+        # Testar conexão fazendo uma chamada simples
+        try:
+            models = await client.models.list()
+            logging.info(f"✅ OpenAI API inicializada com sucesso! Modelos disponíveis: {len(models.data)}")
+            app["openai_client"] = client
+            app["openai_enabled"] = True
+        except Exception as test_error:
+            logging.error(f"❌ Falha ao validar conexão com OpenAI: {test_error}", exc_info=True)
+            app["openai_enabled"] = False
+            app["spam_detector"] = None
+            return
+
+        # Carregar prompt otimizado
+        prompt_path = Path("config/optimized_prompt.txt")
+        if prompt_path.exists():
+            with open(prompt_path, "r", encoding="utf-8") as f:
+                optimized_prompt = f.read()
+            logging.info(f"✅ Prompt otimizado carregado ({len(optimized_prompt)} chars)")
+            app["optimized_prompt"] = optimized_prompt
+        else:
+            logging.warning(f"⚠️ Prompt otimizado não encontrado em {prompt_path}, usando prompt padrão")
+            app["optimized_prompt"] = """Você é um especialista em detecção de spam.
+Analise o email e retorne JSON: {"is_spam": bool, "confidence": 0-1, "reason": "explicação", "category": "tipo"}"""
+
+        # Inicializar detector Two-Pass
+        detector = TwoPassSpamDetector(openai_client=client)
+        app["spam_detector"] = detector
+        logging.info("✅ Sistema Two-Pass inicializado (economia estimada: 38%)")
 
     except Exception as e:
-        logging.error(f"❌ Falha ao inicializar Gemini API: {e}", exc_info=True)
-        app["gemini_enabled"] = False
+        logging.error(f"❌ Falha ao inicializar sistema de detecção: {e}", exc_info=True)
+        app["openai_enabled"] = False
+        app["spam_detector"] = None
 
 
-async def detect_spam_with_gemini(message: str) -> tuple[bool, float, str]:
-    """Detecta spam usando Gemini API.
-
-    Args:
-        message: Corpo do email a ser analisado
-
-    Returns:
-        Tupla (is_spam: bool, confidence: float, reason: str)
-    """
-    try:
-        # Usar modelo Gemini 2.5 Flash (gratuito, rápido e eficiente)
-        model = genai.GenerativeModel('gemini-2.5-flash')
-
-        prompt = f"""Analise este email e determine se é SPAM ou LEGÍTIMO.
-
-Email: {message}
-
-Responda APENAS com JSON neste formato exato:
-{{"is_spam": true ou false, "confidence": 0.0 a 1.0, "reason": "explicação breve em português"}}
-
-Considere SPAM:
-- Ofertas não solicitadas
-- Phishing ou golpes
-- Marketing agressivo
-- Linguagem sensacionalista (CLIQUE AQUI, GANHE DINHEIRO, etc)
-- Urgência artificial
-
-Considere LEGÍTIMO:
-- Mensagens pessoais genuínas
-- Comunicação profissional
-- Confirmações e agendamentos
-- Respostas a conversas anteriores"""
-
-        response = model.generate_content(prompt)
-
-        # Extrair JSON da resposta
-        response_text = response.text.strip()
-
-        # Remover markdown code blocks se existirem
-        if response_text.startswith("```json"):
-            response_text = response_text[7:]
-        if response_text.startswith("```"):
-            response_text = response_text[3:]
-        if response_text.endswith("```"):
-            response_text = response_text[:-3]
-
-        response_text = response_text.strip()
-
-        result = json.loads(response_text)
-
-        is_spam = result.get("is_spam", False)
-        confidence = float(result.get("confidence", 0.5))
-        reason = result.get("reason", "Sem razão fornecida")
-
-        logging.info(f"Gemini analysis: is_spam={is_spam}, confidence={confidence:.2f}, reason={reason}")
-
-        return is_spam, confidence, reason
-
-    except json.JSONDecodeError as e:
-        logging.error(f"❌ Erro ao parsear resposta do Gemini: {e}\nResposta: {response_text}", exc_info=True)
-        # Fallback: assumir não-spam em caso de erro de parsing
-        return False, 0.0, "Erro ao parsear resposta"
-    except Exception as e:
-        logging.error(f"❌ Erro na detecção com Gemini: {e}", exc_info=True)
-        # Fail-open: assumir não-spam em caso de erro
-        return False, 0.0, f"Erro: {str(e)}"
+# Função detect_spam_with_openai removida - agora usa TwoPassSpamDetector
 
 
 def save_spam_email(message_body: str, spam_score: float, payload: dict, reason: str = "") -> None:
@@ -135,7 +104,7 @@ def save_spam_email(message_body: str, spam_score: float, payload: dict, reason:
         message_body: Corpo do email
         spam_score: Score de spam (0.0 a 1.0)
         payload: Payload completo do webhook para contexto adicional
-        reason: Razão da classificação como spam (fornecida pelo Gemini)
+        reason: Razão da classificação como spam (fornecida pela OpenAI)
     """
     try:
         # Criar diretório se não existir
@@ -187,36 +156,43 @@ def save_spam_email(message_body: str, spam_score: float, payload: dict, reason:
 
 
 def load_access_token() -> str | None:
-    """Carrega access token do arquivo OAuth de location.
+    """Carrega PIT token master do .env.
+
+    PIT token não expira e tem todas as permissões quando usado
+    com locationId especificado.
 
     Returns:
-        Access token ou None se não encontrado/inválido
+        PIT token ou None se não encontrado
     """
     try:
-        token_path = "data/location_token.json"
+        pit_token = os.getenv("PIT")
 
-        if not os.path.exists(token_path):
-            logging.warning(f"⚠️ Arquivo de token não encontrado: {token_path}")
+        if not pit_token:
+            logging.error("❌ PIT token não encontrado no .env")
             return None
 
-        with open(token_path, 'r', encoding='utf-8') as f:
-            token_data = json.load(f)
-
-        access_token = token_data.get("access_token")
-
-        if not access_token:
-            logging.error("❌ access_token não encontrado no arquivo de token")
-            return None
-
-        return access_token
+        logging.debug("Usando PIT token master do .env")
+        return pit_token
 
     except Exception as e:
-        logging.error(f"❌ Erro ao carregar access token: {e}", exc_info=True)
+        logging.error(f"❌ Erro ao carregar PIT token: {e}", exc_info=True)
         return None
 
 
+def get_location_id() -> str | None:
+    """Retorna Location ID do ambiente.
+
+    Returns:
+        Location ID ou None se não encontrado
+    """
+    # Location ID fixo (do location_token.json)
+    return "Wc3wencAfbxKbynASybx"
+
+
 async def delete_contact(contact_id: str) -> bool:
-    """Deleta um contato do GoHighLevel usando a API.
+    """Deleta um contato do GoHighLevel usando PIT token master.
+
+    IMPORTANTE: PIT token requer locationId como query parameter para funcionar.
 
     Args:
         contact_id: ID do contato a ser deletado
@@ -225,17 +201,22 @@ async def delete_contact(contact_id: str) -> bool:
         True se deletado com sucesso, False caso contrário
     """
     try:
-        access_token = load_access_token()
+        pit_token = load_access_token()
+        location_id = get_location_id()
 
-        if not access_token:
-            logging.error("❌ Não foi possível carregar access token para deletar contato")
+        if not pit_token:
+            logging.error("❌ Não foi possível carregar PIT token para deletar contato")
             return False
 
-        # Endpoint da API GHL
-        url = f"https://services.leadconnectorhq.com/contacts/{contact_id}"
+        if not location_id:
+            logging.error("❌ Location ID não configurado")
+            return False
+
+        # Endpoint da API GHL com locationId como query parameter
+        url = f"https://services.leadconnectorhq.com/contacts/{contact_id}?locationId={location_id}"
 
         headers = {
-            "Authorization": f"Bearer {access_token}",
+            "Authorization": f"Bearer {pit_token}",
             "Version": "2021-07-28"
         }
 
@@ -243,7 +224,7 @@ async def delete_contact(contact_id: str) -> bool:
         async with aiohttp.ClientSession() as session:
             async with session.delete(url, headers=headers) as response:
                 if response.status == 200:
-                    logging.info(f"✅ Contato {contact_id} deletado com sucesso")
+                    logging.info(f"✅ Contato {contact_id} deletado com sucesso (PIT master)")
                     return True
                 else:
                     response_text = await response.text()
@@ -272,15 +253,36 @@ async def health_basic(_request: web.Request) -> web.Response:
     return web.Response(text="ok")
 
 
+async def spam_stats(request: web.Request) -> web.Response:
+    """Retorna estatísticas do sistema Two-Pass de detecção de spam.
+
+    Útil para monitorar economia e performance.
+    """
+    detector = request.app.get("spam_detector")
+
+    if not detector:
+        return web.json_response({
+            "error": "Sistema de detecção não habilitado"
+        }, status=503)
+
+    stats = detector.get_stats()
+    return web.json_response({
+        "status": "ok",
+        "two_pass_stats": stats,
+        "description": "Estatísticas do sistema Two-Pass de detecção de spam"
+    })
+
+
 # Registro simples de rotas, onde a chave é um identificador da rota
 # e o valor é uma tupla no formato: (método HTTP, caminho, função handler)
 #
-# Este dicionário serve como a “fonte da verdade” das rotas expostas por este
+# Este dicionário serve como a "fonte da verdade" das rotas expostas por este
 # módulo. Mais abaixo, existe uma etapa que lê um arquivo de configuração para
 # decidir quais IDs de rotas ficam habilitados (ou não) na aplicação final.
 ROUTE_REGISTRY = {
     "health_detail": ("GET", "/webhook/health-detail", health_detail),
     "health_basic": ("GET", "/webhook/health", health_basic),
+    "spam_stats": ("GET", "/webhook/spam-stats", spam_stats),
 }
 
 
@@ -392,25 +394,44 @@ def _make_event_handler(event_name: str):
                 logging.warning(f"Message body too large: {len(message_body)} bytes, truncating")
                 message_body = message_body[:10000]
 
-            # ⚠️ DETECTOR DE SPAM COM GEMINI: Apenas para EMAILS
+            # ⚠️ DETECTOR DE SPAM TWO-PASS: Apenas para EMAILS
             # Verificar se é email antes de processar
             is_email = message_channel.upper() in ["EMAIL", "TYPE_EMAIL", "MAIL"]
 
             is_spam = False
             spam_confidence = 0.0
             spam_reason = ""
+            detection_method = "none"
 
             if is_email:
-                # Verificar se Gemini está habilitado
-                gemini_enabled = request.app.get("gemini_enabled", False)
+                # Verificar se detector está habilitado
+                detector = request.app.get("spam_detector")
+                optimized_prompt = request.app.get("optimized_prompt", "")
 
-                if not gemini_enabled:
-                    logging.warning("⚠️ Gemini API não está habilitada, assumindo não-spam")
+                if not detector:
+                    logging.warning("⚠️ Sistema de detecção não está habilitado, assumindo não-spam")
                 else:
-                    # Detectar spam com Gemini API
+                    # Detectar spam com sistema Two-Pass
                     try:
-                        is_spam, spam_confidence, spam_reason = await detect_spam_with_gemini(message_body)
-                        logging.info(f"Gemini detection: is_spam={is_spam}, confidence={spam_confidence:.2f}")
+                        # Extrair subject do payload se disponível
+                        subject = payload.get("subject", "")
+                        if not subject:
+                            # Tentar extrair de estruturas alternativas
+                            email_data = payload.get("emailData", {})
+                            subject = email_data.get("subject", "")
+
+                        result = await detector.detect(message_body, subject, optimized_prompt)
+
+                        is_spam = result.get("is_spam", False)
+                        spam_confidence = result.get("confidence", 0.0)
+                        spam_reason = result.get("reason", "Sem razão fornecida")
+                        detection_method = result.get("method", "unknown")
+
+                        # Log com método de detecção
+                        if detection_method == "fast_rule":
+                            logging.info(f"✅ Detecção por REGRA: is_spam={is_spam}, confidence={spam_confidence:.2f}")
+                        else:
+                            logging.info(f"🤖 Detecção por GPT: is_spam={is_spam}, confidence={spam_confidence:.2f}")
 
                         # Salvar email se detectado como spam
                         if is_spam:
@@ -427,8 +448,13 @@ def _make_event_handler(event_name: str):
                             else:
                                 logging.warning("⚠️ contactId não encontrado no payload, não foi possível deletar contato")
 
+                        # Logar estatísticas a cada 10 detecções
+                        stats = detector.get_stats()
+                        if stats["total"] % 10 == 0 and stats["total"] > 0:
+                            logging.info(f"📊 Estatísticas Two-Pass: {stats['fast_rules_pct']:.1f}% regras, {stats['gpt_calls_pct']:.1f}% GPT, economia: {stats['estimated_savings_pct']:.1f}%")
+
                     except Exception as e:
-                        logging.error(f"❌ Erro no detector de spam com Gemini: {e}", exc_info=True)
+                        logging.error(f"❌ Erro no detector de spam Two-Pass: {e}", exc_info=True)
                         # Fail open: em caso de erro, assumir não-spam para não bloquear mensagens
                         is_spam = False
             else:
@@ -439,15 +465,20 @@ def _make_event_handler(event_name: str):
             RED = "\033[91m"
             BLUE = "\033[94m"
             YELLOW = "\033[93m"
+            CYAN = "\033[96m"
             RESET = "\033[0m"
 
             if is_email and is_spam:
-                print(f"{RED}📧 SPAM EMAIL Detected ({spam_confidence:.0%}): {message_body}")
+                method_icon = "⚡" if detection_method == "fast_rule" else "🤖"
+                method_text = "REGRA" if detection_method == "fast_rule" else "GPT"
+                print(f"{RED}📧 SPAM EMAIL Detected ({spam_confidence:.0%}) [{method_icon} {method_text}]: {message_body[:100]}")
                 print(f"{YELLOW}   Razão: {spam_reason}{RESET}")
             elif is_email:
-                print(f"{GREEN}📧 Email Legítimo ({spam_confidence:.0%}): {message_body}{RESET}")
+                method_icon = "⚡" if detection_method == "fast_rule" else "🤖"
+                method_text = "REGRA" if detection_method == "fast_rule" else "GPT"
+                print(f"{GREEN}📧 Email Legítimo ({spam_confidence:.0%}) [{method_icon} {method_text}]: {message_body[:100]}{RESET}")
             else:
-                print(f"{BLUE}💬 Mensagem {message_channel} (sem análise de spam): {message_body}{RESET}")
+                print(f"{BLUE}💬 Mensagem {message_channel} (sem análise de spam): {message_body[:100]}{RESET}")
 
         return web.json_response({
             "ok": True,
@@ -549,6 +580,6 @@ if disabled:
     logging.info("Rotas desabilitadas: %s", ", ".join(disabled))
 
 
-# Hook de startup para inicializar Gemini API
+# Hook de startup para inicializar OpenAI API
 # Este hook é automaticamente descoberto e executado por webhook_app.py
-on_startup = initialize_gemini
+on_startup = initialize_openai

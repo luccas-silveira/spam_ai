@@ -2,6 +2,7 @@
   "routes": {
     "health_detail": false,
     "health_basic": false,
+    "spam_stats": true,
     "AppointmentCreate": false,
     "AppointmentDelete": false,
     "AppointmentUpdate": false,

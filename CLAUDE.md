@@ -74,7 +74,7 @@ curl -i -X POST http://localhost:8082/webhook/InboundMessage \
 **handlers/webhooks.py**: GHL webhook event handlers
 - Route registry pattern with enable/disable via `config/routes.json`
 - Factory function `_make_event_handler()` generates handlers for GHL events
-- Spam detection integration using Google Gemini AI API for InboundMessage events
+- Spam detection integration using OpenAI GPT-5.2 API for InboundMessage events
 - Alias support: routes available at both `/webhook/*` and `/webhooks/*`
 
 **config/routes.json**: Route configuration
@@ -121,7 +121,7 @@ Key variables in `.env` (see `.env.example` for full template):
 - `IDEMPOTENCY_TTL_SECONDS`: Cache TTL (default: `600`)
 - `IDEMPOTENCY_HEADERS`: Headers to check (default: `Idempotency-Key,X-Event-Id`)
 - `WEBHOOK_ROUTES_CONFIG`: Path to routes config (default: `config/routes.json`)
-- **`GEMINI_API_KEY`**: Google Gemini AI API key for spam detection (get at https://aistudio.google.com/app/apikey)
+- **`OPENAI_API_KEY`**: OpenAI API key for spam detection (get at https://platform.openai.com/api-keys)
 
 ## Adding New Webhook Handlers
 
@@ -133,17 +133,17 @@ Key variables in `.env` (see `.env.example` for full template):
 
 ## Spam Detection
 
-The `InboundMessage` handler integrates Google Gemini AI API for intelligent spam detection with natural language understanding:
+The `InboundMessage` handler integrates OpenAI GPT-5.2 API for intelligent spam detection with natural language understanding:
 
 ### Architecture
 
-- **Async Initialization**: Gemini API is configured during server startup via `initialize_gemini()` hook
-  - Validates API key from `GEMINI_API_KEY` environment variable
+- **Async Initialization**: OpenAI API is configured during server startup via `initialize_openai()` hook
+  - Validates API key from `OPENAI_API_KEY` environment variable
   - Tests connection by listing available models
-  - Stored in `app["gemini_enabled"]` flag for access by all handlers
-  - Graceful degradation: if Gemini fails to initialize, webhooks continue working (assumes non-spam)
+  - Stores async client in `app["openai_client"]` and flag in `app["openai_enabled"]`
+  - Graceful degradation: if OpenAI fails to initialize, webhooks continue working (assumes non-spam)
 
-- **LLM-Powered Detection**: Uses `gemini-2.5-flash` model for semantic analysis
+- **LLM-Powered Detection**: Uses `gpt-5.2-chat-latest` model (GPT-5.2 Instant) for semantic analysis
   - Analyzes message content, context, and intent (not just keywords)
   - Returns structured JSON: `{"is_spam": bool, "confidence": 0.0-1.0, "reason": "explanation"}`
   - Prompts model to consider: unsolicited offers, phishing, aggressive marketing, sensationalist language, artificial urgency
@@ -164,7 +164,7 @@ The `InboundMessage` handler integrates Google Gemini AI API for intelligent spa
 - **Spam Email Storage**: Emails detected as spam are automatically saved
   - Saved to `data/spam_emails/` directory
   - Each email saved as separate JSON file with timestamp filename (e.g., `20251107_113811_176124.json`)
-  - Contains: timestamp, spam_score, confidence, **reason** (from Gemini), message_body, message_type, contact_id, location_id, full_payload
+  - Contains: timestamp, spam_score, confidence, **reason** (from OpenAI), message_body, message_type, contact_id, location_id, full_payload
   - Errors in saving don't break webhook processing (fail-gracefully)
 
 - **Color-Coded Console Output**:
@@ -174,19 +174,23 @@ The `InboundMessage` handler integrates Google Gemini AI API for intelligent spa
 
 ### Configuration
 
-Obtain free API key at https://aistudio.google.com/app/apikey
+Obtain API key at https://platform.openai.com/api-keys (requires paid account with credits)
 
 Add to `.env`:
 ```bash
-GEMINI_API_KEY=your-gemini-api-key-here
+OPENAI_API_KEY=your-openai-api-key-here
 ```
 
-**Free Tier Limits**:
-- 15 requests/minute
-- 1500 requests/day
-- Model: gemini-2.5-flash (fast and economical)
+**Model Details**:
+- Model: `gpt-5.2-chat-latest` (GPT-5.2 Instant variant, released 2026)
+- Alternative models available: `gpt-5.2` (Thinking), `gpt-5.2-pro`, `gpt-5.2-codex`
+- Pricing: $1.75/1M input tokens, $14/1M output tokens (90% discount on cached inputs)
+- Reasoning Control: `reasoning_effort="low"` (fast classification)
+  - Available levels: none, low, medium, high, xhigh
+  - Note: GPT-5.2 does NOT support `temperature` parameter (uses internal reasoning)
+- Features: Native JSON mode, advanced reasoning, long-context support
 
-### Advantages over Previous ML Approach
+### Advantages of LLM-Based Approach
 
 **No False Positives with Portuguese**: LLM understands context and language nuances
 - Correctly classifies short Portuguese messages like "Certo", "Obrigado"
@@ -197,9 +201,10 @@ GEMINI_API_KEY=your-gemini-api-key-here
 - Transparency for users and debugging
 - Helps identify edge cases and improve prompts
 
-**Performance**: ~3-4 seconds per request (API call latency)
+**Performance**: Fast async API calls (~1-3 seconds)
 - No model loading overhead at startup
 - Suitable for webhook processing (async, non-blocking)
+- Native JSON mode ensures reliable structured responses
 
 ## GoHighLevel Event Types
 
