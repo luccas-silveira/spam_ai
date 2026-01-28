@@ -215,11 +215,11 @@ def load_access_token() -> str | None:
         return None
 
 
-async def delete_conversation(conversation_id: str) -> bool:
-    """Deleta uma conversa do GoHighLevel usando a API.
+async def delete_contact(contact_id: str) -> bool:
+    """Deleta um contato do GoHighLevel usando a API.
 
     Args:
-        conversation_id: ID da conversa a ser deletada
+        contact_id: ID do contato a ser deletado
 
     Returns:
         True se deletado com sucesso, False caso contrário
@@ -228,11 +228,11 @@ async def delete_conversation(conversation_id: str) -> bool:
         access_token = load_access_token()
 
         if not access_token:
-            logging.error("❌ Não foi possível carregar access token para deletar conversa")
+            logging.error("❌ Não foi possível carregar access token para deletar contato")
             return False
 
         # Endpoint da API GHL
-        url = f"https://services.leadconnectorhq.com/conversations/{conversation_id}"
+        url = f"https://services.leadconnectorhq.com/contacts/{contact_id}"
 
         headers = {
             "Authorization": f"Bearer {access_token}",
@@ -243,15 +243,15 @@ async def delete_conversation(conversation_id: str) -> bool:
         async with aiohttp.ClientSession() as session:
             async with session.delete(url, headers=headers) as response:
                 if response.status == 200:
-                    logging.info(f"✅ Conversa {conversation_id} deletada com sucesso")
+                    logging.info(f"✅ Contato {contact_id} deletado com sucesso")
                     return True
                 else:
                     response_text = await response.text()
-                    logging.error(f"❌ Erro ao deletar conversa {conversation_id}: {response.status} - {response_text}")
+                    logging.error(f"❌ Erro ao deletar contato {contact_id}: {response.status} - {response_text}")
                     return False
 
     except Exception as e:
-        logging.error(f"❌ Exceção ao deletar conversa {conversation_id}: {e}", exc_info=True)
+        logging.error(f"❌ Exceção ao deletar contato {contact_id}: {e}", exc_info=True)
         return False
 
 
@@ -416,16 +416,16 @@ def _make_event_handler(event_name: str):
                         if is_spam:
                             save_spam_email(message_body, spam_confidence, payload, spam_reason)
 
-                            # Deletar conversa do GoHighLevel
-                            conversation_id = payload.get("conversationId")
-                            if conversation_id:
-                                deleted = await delete_conversation(conversation_id)
+                            # Deletar contato do GoHighLevel
+                            contact_id = payload.get("contactId")
+                            if contact_id:
+                                deleted = await delete_contact(contact_id)
                                 if deleted:
-                                    logging.info(f"🗑️ Conversa de spam deletada: {conversation_id}")
+                                    logging.info(f"🗑️ Contato de spam deletado: {contact_id}")
                                 else:
-                                    logging.warning(f"⚠️ Não foi possível deletar conversa: {conversation_id}")
+                                    logging.warning(f"⚠️ Não foi possível deletar contato: {contact_id}")
                             else:
-                                logging.warning("⚠️ conversationId não encontrado no payload, não foi possível deletar conversa")
+                                logging.warning("⚠️ contactId não encontrado no payload, não foi possível deletar contato")
 
                     except Exception as e:
                         logging.error(f"❌ Erro no detector de spam com Gemini: {e}", exc_info=True)
